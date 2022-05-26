@@ -1,0 +1,243 @@
+esphome:
+  name: hydro-contr
+  platform: ESP32
+  board: nodemcu-32s
+
+wifi:
+
+# Network setup using secrets in HomeAssistants ESPHome integration, if you don't use secrets. replace the "!secret...." part with your network information
+  networks:
+  - ssid: !secret wifi_ssid
+  - password: !secret wifi_password
+  use_address: 10.0.0.15. # Change to an IP reservered for your ESP, you should always use a static IP
+  manual_ip:
+    static_ip: 10.0.0.15
+    gateway: 10.0.0.1
+    subnet: 255.255.255.0
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "Hydrocontroller Fallback Hotspot"
+    password: "SuperSecretPassword"
+
+captive_portal:
+
+# Enable logging
+logger:
+
+# Enable Home Assistant API
+api:
+
+# Enable Over The Air (OTA) firmware updates
+
+ota:
+
+# Font setup for the infos displayed on the
+
+font:
+  - file: "fonts/Roboto-Light.ttf"
+    id: my_font
+    size: 15
+
+  - file: "fonts/Roboto-Bold.ttf"
+    id: my_font1
+    size: 15
+
+  - file: "fonts/Roboto-Bold.ttf"
+    id: my_font2
+    size: 18
+
+  - file: "fonts/Roboto-Light.ttf"
+    id: my_font3
+    size: 10
+
+  - file: 'fonts/Roboto-Light.ttf'
+    id: font1
+    size: 8
+
+  - file: 'fonts/Roboto-Light.ttf'
+    id: font2
+    size: 25
+
+  - file: 'fonts/Roboto-Light.ttf'
+    id: font3
+    size: 14
+
+  - file: 'fonts/Roboto-Bold.ttf'
+    id: font4
+    size: 48
+
+  - file: 'fonts/Roboto-Light.ttf'
+    id: font5
+    size: 20
+
+
+time:
+  - platform: homeassistant
+    id: esptime
+
+
+# i2c pin config for the OLED display
+
+i2c:
+  sda: 21
+  scl: 22
+
+# Temperature probe pin setting
+
+dallas:
+  - pin: 27
+
+
+# Create a switch for each relay (pump, aerator, valve 1 and valve 2)
+
+switch:
+
+  - platform: gpio
+    name: "Hydro-Water-Pump"
+    id: water_pump
+    pin:
+      number: 17
+      inverted: yes
+
+  - platform: gpio
+    name: "Hydro-Air-Pump"
+    id: air_pump
+    pin:
+      number: 18
+      inverted: yes
+
+  - platform: gpio
+    name: "Hydro-Valve-Buckets"
+    id: valve_buckets
+    pin:
+      number: 16
+      inverted: yes
+
+  - platform: gpio
+    name: "Hydro-Valve-Pipe"
+    id: valve_pipe
+    pin:
+      number: 13
+      inverted: yes
+
+sensor:
+
+# WIFI Signal stats
+
+  - platform: wifi_signal
+    name: "${devicename} WiFi Signal Sensor"
+    id: rssi_sensor
+    update_interval: 15s
+  - platform: template
+    name: "Wifi Quality Hydro Controller"
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
+    icon: "mdi:wifi"
+    update_interval: 15s
+    lambda: |-
+        int quality;
+        const int rssi = id(rssi_sensor).state;
+          if (rssi <= -100) { quality = 0;}
+          else if (rssi >= -50)
+          {  quality = 100; }
+          else
+          {  quality = 2 * (rssi + 100); }
+          return quality;
+
+# Water tank temperature
+
+  - platform: dallas
+    index: 0
+    id: water_temp
+    name: "Hydro-Reservoir-Temperature"
+
+# Capture tank water level
+
+  - platform: ultrasonic
+    trigger_pin: 25
+    echo_pin: 26
+    name: "Hydro-Ultrasonic-Sensor"
+    id: water_level
+    update_interval: 15s
+    pulse_time: 20us
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
+    timeout: 4.0m
+    filters:
+
+      - median:
+          window_size: 7
+          send_every: 3
+          send_first_at: 3
+      - lambda: |-
+          if ((x-0.4) > 0.0) return ((x-0.4)/(0.06-0.4)) * -100.0;
+          else return ((x-0.4)/(0.06-0.4))*100;
+
+      - filter_out: nan
+
+# Capture flow rate for each water curcuit
+
+  - platform: pulse_counter
+    name: "Hydro-Flow-Rate-Buckets"
+    id: flow_buckets
+    pin: 32
+    update_interval: 5s
+    filters:
+    - lambda: return (x / 450) / 3.78541;
+    unit_of_measurement: "GPM"
+    accuracy_decimals: 1
+
+  - platform: pulse_counter
+    name: "Hydro-Flow-Rate-Pipe"
+    id: flow_pipe
+    pin: 19
+    update_interval: 5s
+    filters:
+    - lambda: return (x / 450) / 3.78541;
+    unit_of_measurement: "GPM"
+    accuracy_decimals: 1
+
+
+## Display basic info on the OLED display
+
+display:
+  - platform: ssd1306_i2c
+    model: "SSD1306 128x64"
+    address: 0x3C
+    id: my_display
+    pages:
+    - id: page1
+      lambda: |-
+        it.print(0, 0,id(my_font), "RESERVOIR");
+        it.printf(0, 17, id(my_font),"Temp:");it.printf(67, 17, id(my_font1),"%.1f°C",id(water_temp).state);
+        it.print(0, 33, id(my_font),"pH Value:");it.print(67, 33, id(my_font1),"5.5");
+        it.printf(0, 49, id(my_font),"Water lvl:");it.printf(67, 49, id(my_font1),"%.0f%%",id(water_level).state);
+
+    - id: page2
+      lambda: |-
+        if (id(valve_buckets).state) {
+        it.print(0, 0, id(my_font),"BUCKETS");
+        it.printf(0, 60, id(font5),TextAlign::BASELINE_LEFT,"%.1f GPM",id(flow_buckets).state);
+        } else {
+          it.print(0, 0, id(my_font),"BUCKETS");
+          it.print(0, 60, id(font4),TextAlign::BASELINE_LEFT,"OFF");
+        }
+
+
+    - id: page3
+      lambda: |-
+        if (id(valve_pipe).state) {
+        it.print(0, 0, id(my_font),"PIPE");
+        it.printf(0, 60, id(font4),TextAlign::BASELINE_LEFT," %.1f",id(flow_pipe).state);it.print(127, 60, id(font5),TextAlign::BASELINE_RIGHT,"GPM");
+        } else {
+          it.print(0, 0, id(my_font),"PIPE");
+          it.print(0, 60, id(font4),TextAlign::BASELINE_LEFT,"OFF");
+        }
+
+
+# OLED display - cycle through pages on a timer
+interval:
+  - interval: 3s
+    then:
+      - display.page.show_next: my_display
+      - component.update: my_display
